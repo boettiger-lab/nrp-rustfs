@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rustfs-console
+  namespace: boettiger-lab
+  annotations:
+    haproxy-ingress.github.io/cors-enable: "true"
+    haproxy-ingress.github.io/cors-allow-origin: "*"
+    haproxy-ingress.github.io/cors-allow-methods: "GET, POST, OPTIONS"
+    haproxy-ingress.github.io/cors-allow-headers: "Content-Type,Authorization"
+    haproxy-ingress.github.io/cors-allow-credentials: "true"
+    haproxy-ingress.github.io/timeout-server: "60s"
+spec:
+  ingressClassName: haproxy
+  tls:
+    - hosts:
+        - rustfs-console.nrp-nautilus.io
+  rules:
+    - host: rustfs-console.nrp-nautilus.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rustfs-console
+                port:
+                  number: 80
