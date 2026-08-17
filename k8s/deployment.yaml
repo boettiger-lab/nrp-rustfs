@@ -76,9 +76,32 @@ spec:
             # Region must match what clients expect.
             - name: RUSTFS_REGION
               value: "us-east-1"
-            # Virtual-hosted-style domain for AWS SDK compatibility.
+            # The virtual-host domain allowlist — EVERY name a client may dial this
+            # server by, not just the public one.
+            #
+            # rustfs picks addressing style from the request `Host`. A Host in this
+            # list, or a bare IP, is treated as PATH style; anything else is parsed
+            # as VIRTUAL-HOST style, so its first label is taken to be a bucket name.
+            # `rustfs-s3.boettiger-lab.svc.cluster.local` was therefore read as bucket
+            # `rustfs-s3`, and the real request against the caller's bucket failed
+            # authorization.
+            #
+            # The symptom is a blanket `AccessDenied` that no credential or policy
+            # change fixes, and that covers `list_buckets` too — which is how you tell
+            # it apart from a real permissions problem. The same key against the
+            # ClusterIP (an IP can't be virtual-host style) or the public name works.
+            #
+            # Listing only the public name meant in-cluster clients could not
+            # authenticate at all and had to be routed back out through the ingress
+            # (geo-agent-ops#126). For the LLM proxy log mirror that sent ~65 MB of
+            # Parquet out of the pod network and back in on every run, and produced a
+            # real `PutObject … (reached max retries: 4): timeout`.
+            #
+            # Each spelling is a DISTINCT Host — SigV4 signs the host, so there is no
+            # suffix matching. Add a name here BEFORE pointing an in-cluster client
+            # at it.
             - name: RUSTFS_SERVER_DOMAINS
-              value: "rustfs.nrp-nautilus.io"
+              value: "rustfs.nrp-nautilus.io,rustfs-s3.boettiger-lab.svc.cluster.local,rustfs-s3.boettiger-lab.svc,rustfs-s3.boettiger-lab,rustfs-s3"
             # CORS — allow all origins so browser-based tools work.
             - name: RUSTFS_CORS_ALLOWED_ORIGINS
               value: "*"

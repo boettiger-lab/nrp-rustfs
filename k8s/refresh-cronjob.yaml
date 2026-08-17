@@ -1,0 +1,116 @@
+# Weekly age-reset for the rustfs Deployment (Sundays 03:00 UTC).
+#
+# WHY IT EXISTS. NRP culls Deployments on age. `kubectl rollout restart` does NOT
+# reset `creationTimestamp` — the culler reads that field — so the only thing that
+# actually resets the clock is a delete + re-create. This job does exactly that,
+# weekly, from `k8s/deployment.yaml` in THIS repo. The same pattern runs for the
+# `schmidtdse` apps (geo-agent-ops `k8s/schmidtdse-refresh-cron.yaml`).
+#
+# ⚠️ THIS IS WHY AN EDIT TO `k8s/deployment.yaml` MUST BE COMMITTED AND PUSHED.
+# The job re-clones `main` on every run and applies what it finds there. A change
+# made only with `kubectl edit`/`kubectl apply` from a laptop looks fine for up to
+# a week and is then silently reverted the next Sunday at 03:00. `main` is the
+# source of truth for the live Deployment, not the cluster.
+#
+# It was itself untracked for 96 days (created 2026-05-12, found 2026-08-17 while
+# fixing geo-agent-ops#126) — the Deployment's `nrp.ai/username` annotation reading
+# `system:serviceaccount:boettiger-lab:rustfs-refresh` was the only clue that
+# anything was managing it. Committed here so the next person does not have to
+# work that out from an annotation.
+#
+# Scope note: the job applies ONLY `deployment.yaml`. The Service, Ingress, and PVC
+# are not age-culled and are left alone deliberately — re-creating the PVC would be
+# catastrophic.
+#
+#   kubectl apply -f k8s/refresh-cronjob.yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rustfs-refresh
+  namespace: boettiger-lab
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rustfs-refresh
+  namespace: boettiger-lab
+rules:
+# Deployments only, and only in this namespace. `delete` is required — it is the
+# whole point of the job (see above). It deliberately cannot read Secrets.
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rustfs-refresh
+  namespace: boettiger-lab
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rustfs-refresh
+subjects:
+- kind: ServiceAccount
+  name: rustfs-refresh
+  namespace: boettiger-lab
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rustfs-refresh
+  namespace: boettiger-lab
+spec:
+  schedule: "0 3 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: rustfs-refresh
+          initContainers:
+          - name: git-clone-nrp-rustfs
+            image: alpine/git:2.52.0
+            command:
+            - sh
+            - -c
+            - git clone --depth 1 https://github.com/boettiger-lab/nrp-rustfs.git /workspace/nrp-rustfs
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi
+          containers:
+          - name: kubectl
+            image: alpine/k8s:1.30.14
+            workingDir: /workspace
+            command:
+            - sh
+            - -c
+            - |
+              set -e
+              kubectl delete -f nrp-rustfs/k8s/deployment.yaml --ignore-not-found
+              kubectl apply  -f nrp-rustfs/k8s/deployment.yaml
+            volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            resources:
+              requests:
+                cpu: 200m
+                memory: 256Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+          volumes:
+          - name: workspace
+            emptyDir: {}

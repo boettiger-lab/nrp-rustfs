@@ -9,6 +9,21 @@ S3-compatible object storage on [NRP Nautilus](https://nrp.ai) using [RustFS](ht
 | S3 API | `https://rustfs.nrp-nautilus.io` |
 | Web Console | `https://rustfs-console.nrp-nautilus.io` |
 
+**From inside the cluster, use the Service, not the public URL:**
+`http://rustfs-s3.boettiger-lab.svc.cluster.local`. It keeps traffic on the pod
+network instead of sending it out through HAProxy and back — which for a large
+upload is both slower and measurably less reliable.
+
+⚠️ **Any in-cluster name must be listed in `RUSTFS_SERVER_DOMAINS`** (in
+`k8s/deployment.yaml`) before a client can use it. rustfs decides addressing style
+from the request `Host`: a Host on that allowlist — or a bare IP — is treated as
+path style, and **anything else is parsed as virtual-host style, so its first label
+is taken to be a bucket name.** An unlisted name therefore fails with a blanket
+`AccessDenied` that looks like a credentials or policy problem and cannot be fixed
+by changing either. The tell is that the denial covers `list_buckets` too, and that
+the same key works against the ClusterIP (an IP cannot be virtual-host style). This
+cost a day in geo-agent-ops#126; the five current spellings are all listed.
+
 ## Architecture
 
 - **Namespace:** `boettiger-lab`
@@ -28,9 +43,24 @@ k8s/
   service-console.yaml  # ClusterIP service for console (port 80 -> 9001)
   ingress-s3.yaml       # HAProxy ingress for S3 API
   ingress-console.yaml  # HAProxy ingress for console
+  refresh-cronjob.yaml  # weekly age-reset of the Deployment (SA + Role + CronJob)
 ```
 
 TLS is terminated at the HAProxy ingress layer. Internal services use HTTP.
+
+### ⚠️ The Deployment is re-applied weekly from `main`
+
+`refresh-cronjob.yaml` runs Sundays at 03:00 UTC and does `kubectl delete -f
+k8s/deployment.yaml && kubectl apply -f k8s/deployment.yaml`, re-cloning this repo
+each time. It exists because NRP culls Deployments on age and `rollout restart`
+does not reset `creationTimestamp` — only a delete + re-create does.
+
+**So `main` is the source of truth for the live Deployment, not the cluster.** A
+change made only with `kubectl edit` or a local `kubectl apply` works for up to a
+week and is then silently reverted the next Sunday. Commit and push it.
+
+It applies only `deployment.yaml`; the Service, Ingress, and PVC are not age-culled
+and are deliberately left alone (re-creating the PVC would destroy the data).
 
 ## Deploying from scratch
 
@@ -46,7 +76,10 @@ kubectl apply -f k8s/service-s3.yaml -f k8s/service-console.yaml \
               -f k8s/ingress-s3.yaml -f k8s/ingress-console.yaml
 kubectl apply -f k8s/deployment.yaml
 
-# 3. Verify
+# 3. Install the weekly age-reset so NRP's culler doesn't reap the Deployment
+kubectl apply -f k8s/refresh-cronjob.yaml
+
+# 4. Verify
 kubectl -n boettiger-lab get pods -o wide
 curl -sk https://rustfs.nrp-nautilus.io/health
 ```
