@@ -53,8 +53,39 @@ spec:
 
       containers:
         - name: rustfs
-          image: rustfs/rustfs:latest
-          imagePullPolicy: Always
+          # PINNED TO A DIGEST — do not put a floating tag back here.
+          #
+          # This store holds the only second copy of the LLM proxy logs
+          # (geo-agent-ops#117), and it is deleted and re-created WEEKLY by
+          # refresh-cronjob.yaml. With `:latest` + `imagePullPolicy: Always` that
+          # was a fresh roll of the dice every Sunday at 03:00, unattended, with
+          # no record of what had been running and no way to roll back — "put the
+          # old one back" is not an available action when nothing wrote down what
+          # the old one was.
+          #
+          # What this digest is (resolved from `:latest` on 2026-08-17, which had
+          # been running unchanged since 2026-08-16):
+          #
+          #   version   v1.0.0-beta.12   (label `release`; build-type prerelease)
+          #   revision  8601179c3989d131fb68fa311fd517fe281270fe
+          #   built     2026-07-30T04:16:07Z
+          #
+          # ⚠️ `:latest` is NOT the newest build and is NOT an alias of any release
+          # tag. It resolved to beta.12 while `1.0.0-rc.1` and `1.0.0-rc.2` had
+          # already shipped (`rc` → sha256:7d6d361c…). So "just use latest" was not
+          # even tracking upstream's current release — another reason not to.
+          #
+          # TO UPGRADE: pick a tag deliberately, resolve it to a digest, put the
+          # digest here, and commit. Never point this at a tag, even briefly — the
+          # weekly refresh applies whatever is on `main`.
+          #
+          #   docker buildx imagetools inspect rustfs/rustfs:<tag>   # or crane digest
+          #
+          # IfNotPresent, not Always: a digest is immutable, so re-pulling it on
+          # every pod start buys nothing and just adds a registry round-trip to the
+          # restart path of a single-replica store.
+          image: rustfs/rustfs@sha256:41fe89380f4120a337790c02af192c3fe7bb55c3edc2e6e9357b487b47c6ab21
+          imagePullPolicy: IfNotPresent
 
           ports:
             - name: s3
