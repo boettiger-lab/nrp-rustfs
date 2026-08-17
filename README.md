@@ -30,7 +30,7 @@ cost a day in geo-agent-ops#126; the five current spellings are all listed.
 - **Storage:** 500 Gi PVC on `rook-ceph-block` (US West)
 - **Region affinity:** pod pinned to `us-west` to co-locate with storage
 - **Credentials:** stored in `rustfs-credentials` K8s secret
-- **Image:** `rustfs/rustfs:latest`
+- **Image:** pinned by digest to **v1.0.0-beta.12** (`sha256:41fe8938…`) — see [Upgrading](#upgrading-the-image)
 
 ## Kubernetes manifests
 
@@ -135,6 +135,43 @@ rc admin policy create nrp/ policy-name policy.json
 rc admin policy attach nrp/ policy-name --user username
 rc admin policy list nrp/
 ```
+
+## Upgrading the image
+
+The image is **pinned to a digest**, deliberately. Do not put a floating tag back:
+this store holds the only second copy of the LLM proxy logs, and
+`refresh-cronjob.yaml` deletes and re-creates the Deployment **every Sunday at
+03:00 UTC** from whatever is on `main` — so `:latest` meant an unattended,
+unrecorded version change every week, with no way to roll back.
+
+Currently pinned:
+
+| | |
+|---|---|
+| version | `v1.0.0-beta.12` (build-type `prerelease`) |
+| digest | `sha256:41fe89380f4120a337790c02af192c3fe7bb55c3edc2e6e9357b487b47c6ab21` |
+| revision | `8601179c3989d131fb68fa311fd517fe281270fe` |
+| built | 2026-07-30 |
+
+⚠️ **`:latest` is not the newest build, and is not an alias of any release tag.**
+When this was pinned, `latest` resolved to beta.12 while `1.0.0-rc.1` and
+`1.0.0-rc.2` had already shipped. Read the tag list before assuming `latest`
+means current.
+
+To upgrade, resolve the tag you want to a digest and commit it:
+
+```bash
+docker buildx imagetools inspect rustfs/rustfs:1.0.0-rc.2   # or: crane digest ...
+# put the digest in k8s/deployment.yaml, commit, push, then:
+kubectl apply -f k8s/deployment.yaml
+kubectl -n boettiger-lab rollout status deployment/rustfs
+curl -sk https://rustfs.nrp-nautilus.io/health
+```
+
+The Deployment is `strategy: Recreate` on a single replica, so any image change
+takes the store down for the length of a pod restart (~1 min). Anything writing
+to rustfs during that window fails — the hourly log mirror will retry on its next
+run, but time it deliberately rather than during a backup or consolidation.
 
 ## Credential rotation
 
